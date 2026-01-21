@@ -1,0 +1,260 @@
+name: EdgeGateway CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  PROJECT_NAME: edge-gateway
+
+jobs:
+  # ============================================================================
+  #                              Linux构建与测试
+  # ============================================================================
+  build-linux:
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        compiler: [gcc-12, clang-15]
+        build_type: [debug, release]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          ${{ matrix.compiler }} \
+          lcov \
+          valgrind \
+          cppcheck \
+          clang-format-15 \
+          wrk
+    
+    - name: Configure compiler
+      run: |
+        if [[ "${{ matrix.compiler }}" == "gcc-12" ]]; then
+          echo "CC=gcc-12" >> $GITHUB_ENV
+          echo "CXX=g++-12" >> $GITHUB_ENV
+        else
+          echo "CC=clang-15" >> $GITHUB_ENV
+          echo "CXX=clang++-15" >> $GITHUB_ENV
+        fi
+    
+    - name: Build
+      run: |
+        if [[ "${{ matrix.build_type }}" == "debug" ]]; then
+          make linux DEBUG=1 ASAN=1
+        else
+          make linux
+        fi
+    
+    - name: Run tests
+      run: make test
+    
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: linux-${{ matrix.compiler }}-${{ matrix.build_type }}
+        path: bin/
+
+  # ============================================================================
+  #                              嵌入式构建
+  # ============================================================================
+  build-embedded:
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install ARM toolchain
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          gcc-arm-none-eabi \
+          libnewlib-arm-none-eabi
+    
+    - name: Build embedded firmware
+      run: make embedded
+    
+    - name: Check firmware size
+      run: |
+        arm-none-eabi-size bin/edge-gateway.elf
+        # 检查是否超出资源限制
+        TEXT_SIZE=$(arm-none-eabi-size bin/edge-gateway.elf | tail -1 | awk '{print $1}')
+        DATA_SIZE=$(arm-none-eabi-size bin/edge-gateway.elf | tail -1 | awk '{print $2}')
+        BSS_SIZE=$(arm-none-eabi-size bin/edge-gateway.elf | tail -1 | awk '{print $3}')
+        
+        ROM_USED=$((TEXT_SIZE + DATA_SIZE))
+        RAM_USED=$((DATA_SIZE + BSS_SIZE))
+        
+        echo "ROM used: $ROM_USED bytes (limit: 1048576)"
+        echo "RAM used: $RAM_USED bytes (limit: 327680)"
+        
+        if [ $ROM_USED -gt 1048576 ]; then
+          echo "ERROR: ROM usage exceeds 1MB limit!"
+          exit 1
+        fi
+        if [ $RAM_USED -gt 327680 ]; then
+          echo "ERROR: RAM usage exceeds 320KB limit!"
+          exit 1
+        fi
+    
+    - name: Upload firmware
+      uses: actions/upload-artifact@v3
+      with:
+        name: firmware
+        path: |
+          bin/edge-gateway.bin
+          bin/edge-gateway.hex
+          bin/edge-gateway.elf
+
+  # ============================================================================
+  #                              静态检查
+  # ============================================================================
+  static-analysis:
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cppcheck clang-format-15
+    
+    - name: Run cppcheck
+      run: |
+        cppcheck --enable=all --std=c11 \
+          --suppress=missingIncludeSystem \
+          --error-exitcode=1 \
+          -Iinclude src/
+    
+    - name: Check code format
+      run: |
+        find src include -name '*.c' -o -name '*.h' | \
+          xargs clang-format-15 -style=file --dry-run -Werror
+
+  # ============================================================================
+  #                              代码覆盖率
+  # ============================================================================
+  coverage:
+    runs-on: ubuntu-22.04
+    needs: build-linux
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: sudo apt-get install -y lcov
+    
+    - name: Build with coverage
+      run: make coverage
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        files: build/coverage.info
+        fail_ci_if_error: true
+
+  # ============================================================================
+  #                              内存检查
+  # ============================================================================
+  valgrind:
+    runs-on: ubuntu-22.04
+    needs: build-linux
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Valgrind
+      run: sudo apt-get install -y valgrind
+    
+    - name: Build debug version
+      run: make linux DEBUG=1
+    
+    - name: Run Valgrind
+      run: |
+        valgrind --leak-check=full \
+          --show-leak-kinds=all \
+          --track-origins=yes \
+          --error-exitcode=1 \
+          ./bin/edge-gateway --test-mode &
+        sleep 5
+        kill %1 || true
+    
+    - name: Check for leaks
+      run: |
+        if grep -q "definitely lost" build/valgrind.log; then
+          echo "Memory leaks detected!"
+          cat build/valgrind.log
+          exit 1
+        fi
+
+  # ============================================================================
+  #                              性能测试
+  # ============================================================================
+  benchmark:
+    runs-on: ubuntu-22.04
+    needs: build-linux
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install wrk
+      run: sudo apt-get install -y wrk
+    
+    - name: Build release version
+      run: make linux
+    
+    - name: Run benchmark
+      run: |
+        ./bin/edge-gateway &
+        SERVER_PID=$!
+        sleep 2
+        
+        echo "Running benchmark..."
+        wrk -t4 -c100 -d30s http://localhost:9000/ > benchmark_result.txt || true
+        
+        cat benchmark_result.txt
+        
+        # 检查QPS是否达标
+        QPS=$(grep "Requests/sec" benchmark_result.txt | awk '{print $2}')
+        echo "QPS: $QPS"
+        
+        kill $SERVER_PID || true
+    
+    - name: Upload benchmark results
+      uses: actions/upload-artifact@v3
+      with:
+        name: benchmark-results
+        path: benchmark_result.txt
+
+  # ============================================================================
+  #                              发布
+  # ============================================================================
+  release:
+    runs-on: ubuntu-22.04
+    needs: [build-linux, build-embedded, static-analysis, valgrind]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download artifacts
+      uses: actions/download-artifact@v3
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v${{ github.run_number }}
+        name: Release v${{ github.run_number }}
+        files: |
+          firmware/edge-gateway.bin
+          firmware/edge-gateway.hex
+          linux-gcc-12-release/edge-gateway
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
