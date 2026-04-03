@@ -1,0 +1,100 @@
+# EdgeGateway clang-format配置
+# 基于Google风格，针对嵌入式C代码优化
+
+---
+Language: C
+BasedOnStyle: Google
+
+# 缩进
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+IndentCaseLabels: true
+IndentCaseBlocks: false
+NamespaceIndentation: None
+
+# 对齐
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: true
+AlignConsecutiveDeclarations: true
+AlignConsecutiveMacros: true
+AlignEscapedNewlines: Left
+AlignOperands: true
+AlignTrailingComments: true
+
+# 括号
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterCaseLabel: false
+  AfterClass: false
+  AfterControlStatement: Never
+  AfterEnum: false
+  AfterFunction: false
+  AfterNamespace: false
+  AfterStruct: false
+  AfterUnion: false
+  AfterExternBlock: false
+  BeforeCatch: false
+  BeforeElse: false
+  BeforeLambdaBody: false
+  BeforeWhile: false
+  IndentBraces: false
+  SplitEmptyFunction: true
+  SplitEmptyRecord: true
+  SplitEmptyNamespace: true
+
+# 换行
+ColumnLimit: 100
+BreakBeforeBinaryOperators: None
+BreakBeforeTernaryOperators: true
+BreakStringLiterals: true
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+
+# 空格
+SpaceAfterCStyleCast: false
+SpaceAfterLogicalNot: false
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeParens: ControlStatements
+SpaceInEmptyBlock: false
+SpaceInEmptyParentheses: false
+SpacesInCStyleCastParentheses: false
+SpacesInConditionalStatement: false
+SpacesInContainerLiterals: false
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+
+# 指针
+DerivePointerAlignment: false
+PointerAlignment: Left
+
+# 包含
+IncludeBlocks: Regroup
+IncludeCategories:
+  # 系统头文件
+  - Regex: '<[a-z_]+\.h>'
+    Priority: 1
+  # 第三方库
+  - Regex: '<.*>'
+    Priority: 2
+  # 项目头文件
+  - Regex: '".*"'
+    Priority: 3
+SortIncludes: true
+
+# 宏
+AlignConsecutiveMacros: Consecutive
+MacroBlockBegin: ''
+MacroBlockEnd: ''
+
+# 注释
+ReflowComments: true
+SpacesBeforeTrailingComments: 2
+
+# 其他
+InsertBraces: false
+SeparateDefinitionBlocks: Always
+...
